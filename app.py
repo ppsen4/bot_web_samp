@@ -3,6 +3,7 @@ import json
 import os
 import wikipedia
 import string
+from difflib import get_close_matches
 
 app = Flask(__name__)
 
@@ -13,6 +14,7 @@ wikipedia.set_lang("pt")
 DIR_MEMORIAS = "memorias"
 MEMORIA_GIRIA = os.path.join(DIR_MEMORIAS, "giria.json")
 MEMORIA_ACADEMICA = os.path.join(DIR_MEMORIAS, "academico.json")
+MEMORIA_ERRO = os.path.join(DIR_MEMORIAS, "palavra_erro.json")
 
 # Funções de utilidade
 def limpar_texto(texto):
@@ -29,13 +31,12 @@ def salvar_memoria(caminho, memoria):
     with open(caminho, "w", encoding="utf-8") as f:
         json.dump(memoria, f, ensure_ascii=False, indent=4)
 
-# Carrega memórias com chaves normalizadas
-memoria_giria = carregar_memoria(MEMORIA_GIRIA)
-memoria_academica = carregar_memoria(MEMORIA_ACADEMICA)
-
-def eh_giria(frase):
-    girias = ["e aí", "td", "blz", "tranks", "tô", "parça", "mano", "véi", "consa", "mó", "demorô", "suave", "flw"]
-    return any(g in frase for g in girias)
+# Carrega todas as memórias
+memorias = {
+    "giria": carregar_memoria(MEMORIA_GIRIA),
+    "academico": carregar_memoria(MEMORIA_ACADEMICA),
+    "erro": carregar_memoria(MEMORIA_ERRO)
+}
 
 def pesquisar_na_wikipedia(pergunta):
     try:
@@ -47,32 +48,34 @@ def pesquisar_na_wikipedia(pergunta):
     except Exception as e:
         return f"Ocorreu um erro: {str(e)}"
 
+def buscar_resposta(entrada):
+    entrada_limpa = limpar_texto(entrada)
+    
+    # Busca exata
+    for categoria, memoria in memorias.items():
+        if entrada_limpa in memoria:
+            return memoria[entrada_limpa]
+    
+    # Busca aproximada (caso alguma chave seja parecida)
+    for categoria, memoria in memorias.items():
+        correspondencias = get_close_matches(entrada_limpa, memoria.keys(), n=1, cutoff=0.6)
+        if correspondencias:
+            return memoria[correspondencias[0]]
+
+    # Se nada foi encontrado, busca na Wikipedia e salva na categoria mais apropriada
+    resposta_wiki = pesquisar_na_wikipedia(entrada)
+    
+    estilo = "giria" if any(g in entrada_limpa for g in memorias["giria"].keys()) else "academico"
+    salvar_memoria(os.path.join(DIR_MEMORIAS, f"{estilo}.json"), {entrada_limpa: resposta_wiki})
+    
+    return resposta_wiki
+
 @app.route("/", methods=["GET", "POST"])
 def index():
     resposta = ""
     if request.method == "POST":
-        entrada = limpar_texto(request.form["mensagem"])
-
-        if entrada:
-            estilo = "gíria" if eh_giria(entrada) else "acadêmica"
-            memoria = memoria_giria if estilo == "gíria" else memoria_academica
-            caminho = MEMORIA_GIRIA if estilo == "gíria" else MEMORIA_ACADEMICA
-
-            # Busca exata
-            if entrada in memoria:
-                resposta = memoria[entrada]
-            else:
-                # Busca parcial (caso alguma chave esteja contida na entrada)
-                for chave in memoria:
-                    if chave in entrada:
-                        resposta = memoria[chave]
-                        break
-
-                # Se nada foi encontrado, busca na Wikipedia
-                if not resposta:
-                    resposta = pesquisar_na_wikipedia(entrada)
-                    memoria[entrada] = resposta
-                    salvar_memoria(caminho, memoria)
+        entrada_original = request.form["mensagem"]
+        resposta = buscar_resposta(entrada_original)
 
     return render_template("index.html", resposta=resposta)
 
